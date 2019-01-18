@@ -1,0 +1,94 @@
+!-----Param file for coarse-graining methylcellulose systems-------
+!-----Version: Jan-10-2019-----------------------------------------
+!-----Main file: coarsegrain.f90-----------------------------------
+
+MODULE PARAMS_COARSEGRAIN
+
+  USE OMP_LIB
+  IMPLICIT NONE
+
+  ! Required Input Variables
+
+  INTEGER :: nframes, skipfr, freqfr, nfrcntr
+  INTEGER :: nwater, nchains, atperchain
+  INTEGER :: nproc
+
+  !Math Constants
+
+  REAL*8, PARAMETER :: pival  = 3.14159265359
+  REAL*8, PARAMETER :: pi2val = 2.0*pival
+
+  ! Coarsegrain Data
+  
+  INTEGER :: nreq_types
+
+  ! File names and unit Numbers
+  
+  CHARACTER(LEN = 256) :: ana_fname,data_fname,traj_fname,log_fname
+  CHARACTER(LEN = 256) :: dum_fname,out_fname
+  INTEGER, PARAMETER :: anaread = 2,   logout = 3, trajread = 15
+  INTEGER, PARAMETER :: inpread = 100, dumwrite = 200,outwrite=150
+
+
+  !Global analysis variables and flags
+
+  INTEGER :: atomflag, velflag, bondflag, anglflag, dihdflag,imprflag
+  INTEGER :: ntotatoms, ntotbonds, ntotangls,ntotdihds,ntotimprs
+  INTEGER :: ntotatomtypes,ntotbondtypes,ntotangltypes,ntotdihdtypes&
+       &,ntotimprtypes
+
+  !LAMMPS trajectory file read details
+
+  REAL :: box_xl,box_yl,box_zl, boxval
+  INTEGER*8 :: timestep
+
+  !LAMMPS Global Arrays
+
+  REAL*8, ALLOCATABLE, DIMENSION(:,:) :: rxyz_lmp, vel_xyz, charge_lmp&
+       &,masses
+  INTEGER, ALLOCATABLE, DIMENSION(:,:) :: bond_lmp, angl_lmp,&
+       & dihd_lmp, impr_lmp,aidvals
+  CHARACTER,ALLOCATABLE,DIMENSION(:,:) :: keywords
+  REAL,ALLOCATABLE,DIMENSION(:):: boxx_arr, boxy_arr,boxz_arr
+
+  !***************Extra Details***************************************
+  
+  !Coarse-grain ID details
+
+  INTEGER, PARAMETER :: maxneigh = 4
+  INTEGER :: init_ID, init_type, term_ID, term_type
+  INTEGER :: conn_type
+  INTEGER :: nmonsperchain
+
+  !MC Details
+
+  INTEGER :: deg_sub,natpermon
+  
+  !Generic mass details
+
+  REAL*8,PARAMETER :: mass_hyd = 1.00794
+  REAL*8,PARAMETER :: mass_oxy = 15.999
+  REAL*8,PARAMETER :: mass_car = 12.0107
+  REAL*8,PARAMETER :: mass_tol = 0.1
+
+  !Neighbor details
+  INTEGER, ALLOCATABLE, DIMENSION(:) :: nneighbors
+  INTEGER, ALLOCATABLE, DIMENSION(:,:,:) :: cg_mapped_array
+  REAL, ALLOCATABLE, DIMENSION(:,:) :: mass_cg
+
+END MODULE PARAMS_COARSEGRAIN
+
+!--------------------------------------------------------------------
+
+!!$ CGMAPPING() - Main subroutine to coarsegrain
+
+!!$ CONFIRM_INIT_TERM_ATOMS() - To check whether the input ID/type of
+!!initial and final atoms are consistent
+
+!!$ FIND_NEARBY_BONDED_ATOMS() - To retrieve the neighbor atoms (1-2)
+!!of the reference atom (except hydrogen - probably revise later??)
+
+!!$SIEVE_HYDROGENS() - To sieve all hydrogen atoms (probably try to
+!!$incorporate in future)
+
+!!$IS_DUPLICATE() - To check for duplicates in a cg_map

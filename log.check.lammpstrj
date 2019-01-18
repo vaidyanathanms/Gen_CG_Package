@@ -1,0 +1,24 @@
+ ****** Input Structural Details **********
+ Number of frames to be analyzed:            1
+ Skip frames:            0
+ Frequency of analysis            1
+ Number of water molecules:            0
+ Number of chains:            1
+ Number of atoms per chain:           51
+ 
+ ****** Input File Details ****************
+ Datafile used is :c5sub.data
+ Datafile Stats
+ Number of atoms/atomtypes:           51          27
+ Number of bonds/bondtypes:           52          28
+ Number of angles/angletypes:           95          52
+ Number of diheds/dihedtypes:          138          79
+ Successfully finished reading datafile... 
+ Trajectory filename: check.lammpstrj
+ ************************************************
+ 
+ **** Initializing trajectory file read *********
+ Generating coarse-grained mapping
+ Initial atom ID/type:           40          26
+ Terminal atom ID/type:           50          27
+ All analysis completed ..

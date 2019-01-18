@@ -1,0 +1,1199 @@
+!----- Code to coarse-grain methylcellulose systems -----------------
+!----- Version: Jan-10-2019 -----------------------------------------
+!----- Parameter file: params_coarsegrain.f90 -----------------------
+!*******************************************************************!
+
+PROGRAM COARSEGRAIN
+
+  USE PARAMS_COARSEGRAIN
+
+  IMPLICIT NONE
+
+  CALL READ_COARSEGRAIN_INPUTS()
+  CALL READ_DATAFILE()
+  CALL READ_ANALYZE_TRAJECTORYFILE()
+
+  PRINT *, "All analysis completed .."
+  WRITE(logout,*) "All analysis completed .."
+
+  CALL DEALLOCATE_ARRAYS()
+
+END PROGRAM COARSEGRAIN
+
+!---------------------------------------------------------------------
+
+SUBROUTINE READ_COARSEGRAIN_INPUTS()
+
+  USE PARAMS_COARSEGRAIN
+
+  IMPLICIT NONE
+  
+  INTEGER :: nargs,ierr,logflag,AllocateStatus,i,j,outflag
+  CHARACTER(256) :: dumchar
+
+  CALL DEFAULTVALUES()
+
+  nargs = IARGC()
+  IF(nargs .NE. 1) STOP "Input incorrect"
+
+  logflag = 0; outflag = 0
+
+  CALL GETARG(nargs,ana_fname)
+
+  OPEN(unit = anaread,file=trim(ana_fname),action="read",status="old"&
+       &,iostat=ierr)
+  
+  IF(ierr /= 0) THEN
+
+     PRINT *, trim(ana_fname), "not found"
+     STOP
+
+  END IF
+
+  DO
+
+     READ(anaread,*,iostat=ierr) dumchar
+
+     IF(ierr .LT. 0) EXIT
+
+     IF(dumchar == 'datafile') THEN
+        
+        READ(anaread,*,iostat=ierr) data_fname
+
+     ELSEIF(dumchar == 'trajectory_file') THEN
+
+        READ(anaread,*,iostat=ierr) traj_fname
+
+     ELSEIF(dumchar == 'nframes') THEN
+
+        READ(anaread,*,iostat=ierr) nframes
+
+     ELSEIF(dumchar == 'skipfr') THEN
+
+        READ(anaread,*,iostat=ierr) skipfr
+
+     ELSEIF(dumchar == 'freqfr') THEN
+
+        READ(anaread,*,iostat=ierr) freqfr
+        
+     ELSEIF(dumchar == 'cgdata') THEN
+        
+        READ(anaread,*,iostat=ierr) nreq_types
+
+     ELSEIF(dumchar == 'nchains') THEN
+
+        READ(anaread,*,iostat=ierr) nchains
+
+     ELSEIF(dumchar == 'nwater') THEN
+
+        READ(anaread,*,iostat=ierr) nwater
+
+     ELSEIF(dumchar == 'atomsperchain') THEN
+
+        READ(anaread,*,iostat=ierr) atperchain
+
+     ELSEIF(dumchar == 'nmonsperchain') THEN
+           
+        READ(anaread,*,iostat=ierr) nmonsperchain
+
+     ELSEIF(dumchar == 'log_file') THEN
+
+        READ(anaread,*,iostat=ierr) log_fname
+        logflag  = 1
+
+     ELSEIF(dumchar == 'init_atom') THEN
+
+        READ(anaread,*,iostat=ierr) init_ID, init_type
+
+     ELSEIF(dumchar == 'term_atom') THEN
+
+        READ(anaread,*,iostat=ierr) term_ID, term_type
+
+     ELSEIF(dumchar == 'connector_type') THEN
+
+        READ(anaread,*,iostat=ierr) conn_type
+
+     ELSEIF(dumchar == 'deg_substitution') THEN
+
+        READ(anaread,*,iostat=ierr) deg_sub
+
+     ELSEIF(dumchar == 'num_atoms_per_CG') THEN
+
+        READ(anaread,*,iostat=ierr) natpermon
+
+     ELSEIF(dumchar == 'output_write') THEN
+
+        READ(anaread,*,iostat=ierr) out_fname
+        outflag = 1
+
+     ELSE
+        
+        PRINT *, "unknown keyword: ", trim(dumchar)
+        STOP
+
+     END IF
+
+  END DO
+
+  IF(logflag == 0) log_fname = "log."//trim(adjustl(traj_fname))
+  OPEN(unit = logout,file=trim(log_fname),action="write",status="repla&
+       &ce",iostat=ierr)
+
+  IF(outflag == 0) out_fname = "cgout."//trim(adjustl(traj_fname))
+  PRINT *, "Analysis input file read finished .."
+
+  CALL WRITE_LOGOUT()
+
+END SUBROUTINE READ_COARSEGRAIN_INPUTS
+
+!---------------------------------------------------------------------
+
+SUBROUTINE DEFAULTVALUES()
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  ! Basic initializations
+  nframes = 0; skipfr = 0; freqfr = 1; nfrcntr = 0
+  nwater  = 0; nchains = 0;
+  atperchain = 0; nmonsperchain = 0; natpermon = 0
+
+  ! ID initializations
+
+  init_ID = -1; term_ID = -1; init_type = -1; term_type = -1
+  conn_type = -1
+
+END SUBROUTINE DEFAULTVALUES
+
+!---------------------------------------------------------------------
+
+SUBROUTINE WRITE_LOGOUT()
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  
+  WRITE(logout,*) "****** Input Structural Details **********"
+  WRITE(logout,*) "Number of frames to be analyzed: ", nframes
+  WRITE(logout,*) "Skip frames: ", skipfr
+  WRITE(logout,*) "Frequency of analysis ", freqfr
+  WRITE(logout,*) "Number of water molecules: ", nwater
+  WRITE(logout,*) "Number of chains: ", nchains
+  WRITE(logout,*) "Number of atoms per chain: ", atperchain
+  WRITE(logout,*)
+
+  WRITE(logout,*) "****** Input File Details ****************"
+
+
+END SUBROUTINE WRITE_LOGOUT
+
+!---------------------------------------------------------------------
+
+SUBROUTINE READ_DATAFILE()
+
+  USE PARAMS_COARSEGRAIN
+
+  IMPLICIT NONE
+
+  INTEGER :: i,j,k,ierr,u,AllocateStatus,imax
+  INTEGER :: flag, cntr, nwords
+  INTEGER :: aid,molid,atype,ix,iy,iz
+  REAL    :: charge,rx,ry,rz
+  REAL    :: xlo,xhi,ylo,yhi,zlo,zhi
+  CHARACTER(256) :: rline,dumchar
+
+  CALL COMPUTE_INIT_NLINES(imax)
+
+  OPEN(unit=inpread,file = trim(data_fname),action =&
+       & 'read', status='old',iostat=ierr) 
+  
+  IF(ierr .NE. 0) STOP "Data file not found"
+
+  WRITE(logout,*) "Datafile used is :", trim(adjustl(data_fname))
+
+  ntotatoms = 0;ntotbonds=0;ntotangls=0;ntotdihds=0;ntotimprs=0
+  atomflag =0;velflag = 0;bondflag=0;anglflag=0;dihdflag=0;imprflag=0
+
+  READ(inpread,*)
+
+  DO i = 1,imax-1 !Change here according to convenience
+       
+     READ(inpread,*) u, dumchar
+     
+        IF(dumchar == "atoms") THEN
+           ntotatoms = u
+        ELSEIF(dumchar == "bonds") THEN
+           ntotbonds = u
+        ELSEIF(dumchar == "angles") THEN
+           ntotangls = u
+        ELSEIF(dumchar == "dihedrals") THEN
+           ntotdihds = u
+        ELSEIF(dumchar == "atom" .OR. dumchar == "atomtypes") THEN
+           ntotatomtypes = u
+        ELSEIF(dumchar == "bond" .OR. dumchar == "bondtypes") THEN
+           ntotbondtypes = u
+        ELSEIF(dumchar == "angle" .OR. dumchar == "atomtypes") THEN
+           ntotangltypes = u
+        ELSEIF(dumchar == "dihedral" .OR. dumchar == "dihedraltypes") THEN
+           ntotdihdtypes = u
+        ELSEIF(dumchar == "improper" .OR. dumchar == "impropertypes") THEN
+           ntotimprtypes = u
+        ELSEIF(dumchar == "Masses") THEN
+           
+           ALLOCATE(masses(ntotatomtypes,1),stat = AllocateStatus)
+           IF(AllocateStatus/=0) STOP "did not allocate masses"
+           
+           DO j = 1,ntotatomtypes
+              
+              READ(inpread,*) u, masses(u,1)
+              
+           END DO
+           
+        END IF
+        
+  END DO
+
+  READ(inpread,*)
+  READ(inpread,*) xlo, xhi
+  READ(inpread,*) ylo, yhi
+  READ(inpread,*) zlo, zhi
+  
+  box_xl = xhi - xlo
+  box_yl = yhi - ylo
+  box_zl = zhi - zlo
+
+  PRINT *, "x-box  ", "y-box  ", "z-box  "
+  PRINT *, box_xl, box_yl, box_zl
+
+  PRINT *, "STATISTICS"
+  PRINT *, "Number of atoms/atomtypes: " , ntotatoms,ntotatomtypes
+  PRINT *, "Number of bonds/bondtypes: " , ntotbonds,ntotbondtypes
+  PRINT *, "Number of angles/angletypes: " , ntotangls,ntotangltypes
+  PRINT *, "Number of diheds/dihedtypes: " , ntotdihds,ntotdihdtypes
+  flag = 0; cntr = 0
+
+  WRITE(logout,*), "Datafile Stats"
+  WRITE(logout,*) "Number of atoms/atomtypes: " , ntotatoms&
+       &,ntotatomtypes
+  WRITE(logout,*) "Number of bonds/bondtypes: " , ntotbonds&
+       &,ntotbondtypes
+  WRITE(logout,*) "Number of angles/angletypes: " , ntotangls&
+       &,ntotangltypes
+  WRITE(logout,*) "Number of diheds/dihedtypes: " , ntotdihds&
+       &,ntotdihdtypes
+
+
+  CALL ALLOCATE_ARRAYS()
+
+  DO 
+
+     READ(inpread,*,iostat=ierr) dumchar
+
+     IF(ierr .LT. 0) EXIT
+
+     !READ DATA HERE FOR CHARGES AND MOLID
+     !READ EVERYTHING AND OVERWRITE LATER
+     IF(trim(dumchar) == "Atoms") THEN
+             
+        atomflag = 1
+        print *, "Reading ", trim(dumchar), " info"
+
+        DO j = 1,ntotatoms
+
+           READ(inpread,*) aid,molid,atype,charge,rx,ry,rz
+
+           rx = rx - xlo
+           ry = ry - ylo
+           rz = rz - zlo
+
+           aidvals(aid,1)     = aid
+           aidvals(aid,2)     = molid
+           aidvals(aid,3)     = atype
+           charge_lmp(aid,1)  = charge
+           rxyz_lmp(aid,1)    = rx
+           rxyz_lmp(aid,2)    = ry
+           rxyz_lmp(aid,3)    = rz
+
+        END DO
+
+     END IF
+
+     IF(trim(dumchar) == "Masses") THEN
+
+        ALLOCATE(masses(ntotatomtypes,1),stat = AllocateStatus)
+        IF(AllocateStatus/=0) STOP "did not allocate masses"
+         
+        DO j = 1,ntotatomtypes
+
+           READ(inpread,*) u, masses(u,1)
+
+        END DO
+
+     END IF
+
+     IF(trim(dumchar) == "Velocities") THEN
+             
+        velflag = 1
+        print *, "Reading ", trim(dumchar), " info"
+
+        DO j = 1,ntotatoms
+
+           READ(inpread,*) vel_xyz(j,1),vel_xyz(j,2),vel_xyz(j,3)&
+                &,vel_xyz(j,4)
+
+        END DO
+
+
+     END IF
+
+     IF(trim(dumchar) == "Bonds") THEN
+             
+        bondflag = 1
+        print *, "Reading ", trim(dumchar), " info"
+
+        DO j = 1,ntotbonds
+
+           READ(inpread,*) bond_lmp(j,1),bond_lmp(j,2),bond_lmp(j,3)&
+                &,bond_lmp(j,4)
+
+        END DO
+
+     END IF
+
+     IF(trim(dumchar) == "Angles") THEN
+             
+        anglflag = 1
+        print *, "Reading ", trim(dumchar), " info"
+
+        DO j = 1,ntotangls
+
+           READ(inpread,*) angl_lmp(j,1),angl_lmp(j,2),angl_lmp(j,3)&
+                &,angl_lmp(j,4),angl_lmp(j,5)
+
+        END DO
+
+     END IF
+
+     IF(trim(dumchar) == "Dihedrals") THEN
+             
+        dihdflag = 1
+        print *, "Reading", trim(dumchar), "info"
+
+        DO j = 1,ntotdihds
+
+           READ(inpread,*) dihd_lmp(j,1),dihd_lmp(j,2),dihd_lmp(j,3)&
+                &,dihd_lmp(j,4),dihd_lmp(j,5),dihd_lmp(j,6)
+
+        END DO
+
+     END IF
+  
+     IF(trim(dumchar) == "Impropers") THEN
+             
+        imprflag = 1
+        print *, "Reading", trim(dumchar), "info"
+
+        DO j = 1,ntotimprs
+
+           READ(inpread,*) impr_lmp(j,1),impr_lmp(j,2),impr_lmp(j,3)&
+                &,impr_lmp(j,4),impr_lmp(j,5),impr_lmp(j,6)
+
+        END DO
+
+     END IF
+
+  END DO
+  
+  PRINT *, "Fileread finish .."
+  WRITE(logout,*) "Successfully finished reading datafile... "
+
+END SUBROUTINE READ_DATAFILE
+
+!--------------------------------------------------------------------
+
+SUBROUTINE COMPUTE_INIT_NLINES(imax)
+
+  USE PARAMS_COARSEGRAIN
+
+  IMPLICIT NONE
+
+  INTEGER, INTENT(OUT) :: imax
+  INTEGER :: init, pos, ipos,u,nwords,lcnt,ierr
+  CHARACTER(LEN=120) :: charline
+
+  OPEN(unit=inpread,file = trim(data_fname),action =&
+       & 'read', status='old',iostat=ierr) 
+  
+  IF(ierr .NE. 0) STOP "Data file not found"
+  
+  lcnt = 0
+
+  READ(inpread,*)
+
+  DO 
+
+     READ(inpread,'(A)',iostat=ierr) charline     
+
+     lcnt = lcnt + 1
+     pos = 1
+     nwords = 0
+
+     DO
+
+        ipos = VERIFY(charline(pos:),' ')
+        IF(ipos == 0) EXIT
+        nwords = nwords + 1
+        pos = pos + ipos - 1
+        ipos = SCAN(charline(pos:),' ')
+        IF(ipos == 0) EXIT
+        pos = pos + ipos - 1
+        
+     END DO
+
+     IF(nwords .GE. 4) THEN
+
+        imax = lcnt - 1
+        EXIT
+        
+     END IF
+
+  END DO
+
+  CLOSE(inpread)
+
+END SUBROUTINE COMPUTE_INIT_NLINES
+
+!--------------------------------------------------------------------
+
+SUBROUTINE READ_ANALYZE_TRAJECTORYFILE()
+
+  USE PARAMS_COARSEGRAIN
+
+  IMPLICIT NONE
+
+  INTEGER :: i,j,aid,ierr,atchk,atype,jumpfr
+  REAL :: xlo,xhi,ylo,yhi,zlo,zhi
+
+  OPEN(unit = trajread,file =trim(traj_fname),action="read",status="ol&
+       &d",iostat=ierr)
+
+  IF(ierr /= 0) STOP "trajectory file not found"
+
+  PRINT *, "Trajectory file used is: ",trim(adjustl(traj_fname))
+  PRINT *
+
+  WRITE(logout,*) "Trajectory filename: ",trim(adjustl(traj_fname))
+  WRITE(logout,*) "************************************************"
+  WRITE(logout,*) 
+  WRITE(logout,*) "**** Initializing trajectory file read *********"
+
+  CALL STRUCT_INIT()
+  CALL OPEN_STRUCT_OUTPUT_FILES()
+
+  DO i = 1,skipfr
+
+     DO j = 1,ntotatoms+9
+
+        READ(trajread,*) 
+
+     END DO
+
+     IF(mod(i,100) == 0) PRINT *, "Skipped ", i, "frames"
+
+  END DO
+
+  DO i = 1,nframes
+
+     nfrcntr = nfrcntr + 1
+     IF(mod(i,100) == 0) PRINT *, "Processing ", i+1,"th frame"
+
+     READ(trajread,*)
+     READ(trajread,*) timestep
+
+     READ(trajread,*) 
+     READ(trajread,*) atchk
+!!$     IF(atchk /= ntotatoms) STOP "Number of atoms do not match"
+
+     READ(trajread,*) 
+     READ(trajread,*) xlo, xhi
+     READ(trajread,*) ylo, yhi
+     READ(trajread,*) zlo, zhi
+
+     READ(trajread,*)
+
+     box_xl = xhi - xlo
+     box_yl = yhi - ylo
+     box_zl = zhi - zlo
+     
+     boxx_arr(i)  = box_xl
+     boxy_arr(i)  = box_yl
+     boxz_arr(i)  = box_zl
+
+     DO j = 1,atchk
+
+        READ(trajread,*) aid,atype,rxyz_lmp(aid,1),rxyz_lmp(aid,2)&
+             &,rxyz_lmp(aid,3)
+
+        IF(atype .NE. aidvals(aid,3)) THEN
+
+           PRINT *, "Incorrect atom ids"
+           PRINT *, i,j,aid,atype,aidvals(aid,3)
+           STOP
+
+        END IF
+
+     END DO
+
+     DO j = 1,atchk
+
+        rxyz_lmp(j,1) = rxyz_lmp(j,1) - xlo
+        rxyz_lmp(j,2) = rxyz_lmp(j,2) - ylo
+        rxyz_lmp(j,3) = rxyz_lmp(j,3) - zlo
+        
+     END DO
+
+     CALL STRUCT_MAIN(nfrcntr)
+     
+     IF(skipfr + i*freqfr + 1 .LT. nframes) THEN
+
+        DO jumpfr = 1,freqfr
+           
+           READ(trajread,*)
+           READ(trajread,*)        
+           READ(trajread,*)
+           
+           READ(trajread,*) atchk
+           
+           DO j = 1,atchk+5
+              
+              READ(trajread,*) 
+              
+           END DO
+           
+        END DO
+
+     END IF
+
+  END DO
+
+  CLOSE(trajread)
+  
+END SUBROUTINE READ_ANALYZE_TRAJECTORYFILE
+
+!--------------------------------------------------------------------
+
+SUBROUTINE STRUCT_INIT()
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  INTEGER :: AllocateStatus
+  INTEGER :: i,j,k
+
+  ALLOCATE(cg_mapped_array(natpermon,nmonsperchain,nchains),stat =&
+       & AllocateStatus)
+  IF(AllocateStatus/=0) STOP "did not allocate cg_mapped_array"
+
+  !Add/remove all structural details that needs to be initialized
+
+  DO k = 1,nchains
+     
+     DO j = 1,nmonsperchain
+        
+        DO i = 1,natpermon
+
+           cg_mapped_array(i,j,k) = -1
+
+        END DO
+
+     END DO
+
+  END DO
+  
+  PRINT *, "---------------------------------"
+  PRINT *, "Generating coarse-grained mapping"
+  PRINT *, "---------------------------------"
+  PRINT *, "Finding polymer configuration from topology information.."
+
+  WRITE(logout,*) "Generating coarse-grained mapping"
+
+  CALL MAIN_CG_MAPPING()
+  CALL FIND_MASS_OF_CG_ATOMS()
+  CALL WRITE_CG_MAP()
+
+  PRINT *, "Coarse-graining steps completed .."
+  PRINT *, "----------------------------------"
+
+
+  PRINT *
+  PRINT *, "-----------------------------------------"
+  PRINT *, "Begin analysis of coarse-grained atoms .."
+  PRINT *, "-----------------------------------------"
+
+END SUBROUTINE STRUCT_INIT
+
+!--------------------------------------------------------------------
+
+SUBROUTINE OPEN_STRUCT_OUTPUT_FILES()
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  !Add/remove all instantaneous output structure files
+
+
+END SUBROUTINE OPEN_STRUCT_OUTPUT_FILES
+
+!--------------------------------------------------------------------
+
+SUBROUTINE STRUCT_MAIN()
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  !Add/remove all structural subroutines
+
+
+END SUBROUTINE STRUCT_MAIN
+
+!--------------------------------------------------------------------
+
+SUBROUTINE MAIN_CG_MAPPING()
+
+!********Main subroutine for coarse-grained mapping******************
+
+  USE PARAMS_COARSEGRAIN
+
+  IMPLICIT NONE
+
+  INTEGER :: neighID1, neighID2, neighID3, neighID4,numneigh
+  INTEGER :: dummy_init_ID, monflag,hydflagval,dupflag
+  INTEGER :: i,j,k,cnt,fillpointer,next_init
+  INTEGER :: cg_id,prevdup
+
+
+  ! Confirm presence initial ID/type and terminal ID/type
+ 
+  PRINT *, "Initiating Step 1: Finding initial/terminal atoms ..."
+  CALL CONFIRM_INIT_TERMINAL_ATOMS()
+
+  PRINT *, "Initiating Step 2: Creating CG map ..."
+  
+  dummy_init_ID = init_ID
+
+  DO k = 1,nchains !over total number of chains
+
+     DO i = 1,nmonsperchain !over total number of mons per chain
+
+        monflag = -1
+        fillpointer   = 1
+        cnt = 1
+
+        DO WHILE (monflag == -1)
+  
+           ! Find number of nearby atoms - this reduces error if
+           ! arrays are allocated and deallocated properly
+           CALL FIND_NUMBER_NEIGHBORS(dummy_init_ID,numneigh)
+           ! Find mapping by looking at bonds (except hydrogens)
+           CALL FIND_NEARBY_BONDED_ATOMS(dummy_init_ID,numneigh)
+              
+           DO j = 1,numneigh
+
+              CALL SIEVE_HYDROGENS(nneighbors(j),hydflagval)
+              
+              IF(hydflagval == -1) THEN
+                 
+                 CALL IS_DUPLICATE(k,i,nneighbors(j),dupflag)
+
+                 !When the atom is at the intersection of two monomers
+                 !the connection should be to the new monomer.
+                 prevdup = -1
+                 IF(aidvals(dummy_init_ID,3) == conn_type) THEN
+                    CALL IS_DUPLICATE_PREV(k,i,nneighbors(j),prevdup)
+                 END IF
+
+                 IF(dupflag == -1 .AND. prevdup == -1) THEN
+                    
+                    IF(aidvals(nneighbors(j),3) == conn_type .AND.&
+                         & nneighbors(j) .NE. init_ID) THEN
+
+                       next_init = nneighbors(j)
+
+                    ELSE
+
+                       cg_mapped_array(cnt,i,k) = nneighbors(j)
+                       cnt = cnt + 1
+
+                    END IF
+
+                 END IF
+                 
+              END IF
+              
+           END DO
+
+           ! Now reset the new node as the member of the mapped array
+           dummy_init_ID = cg_mapped_array(fillpointer,i,k)
+
+           DO WHILE(aidvals(dummy_init_ID,3) == conn_type .AND. &
+                & monflag == -1)
+              
+              fillpointer = fillpointer + 1
+              IF(fillpointer .GT. natpermon) THEN
+                 monflag = 1
+              ELSE
+                 dummy_init_ID = cg_mapped_array(fillpointer,i,k)
+              END IF
+
+           END DO
+           
+           !Exit condition for loop
+           IF(fillpointer == natpermon) THEN
+              monflag = 1
+           ELSE 
+              fillpointer = fillpointer + 1
+           END IF
+
+           DEALLOCATE(nneighbors)
+
+        END DO
+        
+        dummy_init_ID = next_init
+
+     END DO
+     
+  END DO
+  
+  PRINT *, "CG map successful ..."
+
+END SUBROUTINE MAIN_CG_MAPPING
+
+!--------------------------------------------------------------------
+
+SUBROUTINE CONFIRM_INIT_TERMINAL_ATOMS()
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  INTEGER :: i
+  INTEGER :: ifindflag, tfindflag
+  
+  ifindflag = -1; tfindflag = -1
+
+  DO i = 1,ntotatoms
+
+     IF(aidvals(i,1) == init_ID) THEN
+        
+        IF(aidvals(i,3) == init_type) THEN
+
+           WRITE(logout,*) "Initial atom ID/type: ", init_ID,init_type
+           ifindflag = 1
+
+        ELSE
+
+           PRINT *, "ERROR: Initial ID/type mismatch"
+           PRINT *, aidvals(i,1),aidvals(i,3),init_ID,init_type
+           STOP
+
+        END IF
+
+     END IF
+
+     IF(aidvals(i,1) == term_ID) THEN
+        
+        IF(aidvals(i,3) == term_type) THEN
+
+           WRITE(logout,*) "Terminal atom ID/type: ", term_ID&
+                &,term_type
+
+           tfindflag = 1
+
+        ELSE
+
+           PRINT *, "ERROR: Initial ID/type mismatch"
+           PRINT *, aidvals(i,1),aidvals(i,3),term_ID,term_type
+           STOP
+
+        END IF
+
+     END IF
+
+  END DO
+
+  IF(ifindflag == -1 .OR. tfindflag == -1) THEN
+
+     PRINT *, "ERROR: Did not find terminal/initial atoms"
+     STOP
+
+  ELSE
+     
+     PRINT *, "Found initial/terminal atoms .."
+
+  END IF
+
+END SUBROUTINE CONFIRM_INIT_TERMINAL_ATOMS
+
+!--------------------------------------------------------------------
+
+SUBROUTINE FIND_NUMBER_NEIGHBORS(inp_ID,outneigh)
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  INTEGER, INTENT(IN)  :: inp_ID
+  INTEGER, INTENT(OUT) :: outneigh
+  INTEGER :: i,b_id1,b_id2,b_typ1,b_typ2,cntr
+
+  i = 1; cntr = 0
+
+  DO WHILE(i .LE. ntotbonds)
+
+     b_id1 = bond_lmp(i,3); b_typ1 = aidvals(b_id1,3)
+     b_id2 = bond_lmp(i,4); b_typ2 = aidvals(b_id2,3)
+
+     IF(b_id1 == inp_ID) THEN
+
+        cntr = cntr+1        
+        
+     ELSEIF(b_id2 == inp_ID) THEN
+        
+        cntr = cntr + 1
+
+     END IF
+
+     i = i + 1
+
+  END DO
+
+  outneigh = cntr
+
+END SUBROUTINE FIND_NUMBER_NEIGHBORS
+
+!--------------------------------------------------------------------
+
+SUBROUTINE FIND_NEARBY_BONDED_ATOMS(inp_ID,nneigh)
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  INTEGER, INTENT(IN)  :: inp_ID,nneigh
+  INTEGER :: i,b_id1,b_id2,b_typ1,b_typ2,cntr
+  INTEGER :: AllocateStatus
+
+  ALLOCATE(nneighbors(nneigh),stat=AllocateStatus)
+  IF(AllocateStatus/=0) STOP "did not allocate nneighbors"
+
+  nneighbors = -1
+  i = 1; cntr = 0
+
+  DO WHILE(i .LE. ntotbonds)
+
+     b_id1 = bond_lmp(i,3); b_typ1 = aidvals(b_id1,3)
+     b_id2 = bond_lmp(i,4); b_typ2 = aidvals(b_id2,3)
+
+     IF(b_id1 == inp_ID) THEN
+
+        cntr = cntr+1        
+        nneighbors(cntr) = b_id2 !Neighbor will be other atom
+
+        
+     ELSEIF(b_id2 == inp_ID) THEN
+        
+        cntr = cntr + 1
+        nneighbors(cntr) = b_id1 !Neighbor will be the other atom
+
+     END IF
+
+     i = i + 1
+
+  END DO
+  
+  IF(cntr .NE. nneigh) THEN
+     PRINT *, "Unequal number of neighbors: ", cntr,nneigh
+     STOP
+  END IF
+
+
+END SUBROUTINE FIND_NEARBY_BONDED_ATOMS
+
+!--------------------------------------------------------------------
+
+SUBROUTINE SIEVE_HYDROGENS(inp_ID,outflag)
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  INTEGER, INTENT(IN) :: inp_ID
+  INTEGER, INTENT(OUT) :: outflag
+  INTEGER :: inp_type
+  
+  outflag = -1 !Assume it is not hydrogen
+  inp_type = aidvals(inp_ID,3)
+
+  IF(abs(masses(inp_type,1)-mass_hyd) < mass_tol) outflag = 1
+  
+
+END SUBROUTINE SIEVE_HYDROGENS
+
+!--------------------------------------------------------------------
+
+SUBROUTINE IS_DUPLICATE(chainID,monID,refID,outflag)
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  INTEGER, INTENT(IN) :: chainID, monID, refID
+  INTEGER, INTENT(OUT) :: outflag
+
+  INTEGER :: i
+
+  outflag = -1 !Assume it is not already there
+
+  DO i = 1,natpermon
+
+     IF(cg_mapped_array(i,monID,chainID) == -1) EXIT
+
+     IF(refID == cg_mapped_array(i,monID,chainID)) THEN
+
+        outflag = 1 !if found change the flag details
+        EXIT
+
+     END IF
+     
+  END DO
+
+END SUBROUTINE IS_DUPLICATE
+
+!--------------------------------------------------------------------
+
+SUBROUTINE IS_DUPLICATE_PREV(chainID,monID,refID,outflag)
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  INTEGER, INTENT(IN) :: chainID, monID, refID
+  INTEGER, INTENT(OUT) :: outflag
+  INTEGER :: i
+
+  outflag = -1 !Assume it is not already there
+
+  IF(monID .NE. 1) THEN !Check for the bonded monomer from second
+     !monomer onwards
+
+     DO i = 1,natpermon
+
+        IF(refID == cg_mapped_array(i,monID-1,chainID)) THEN
+
+           outflag = 1 !if found change the flag details
+           EXIT
+
+        END IF
+     
+     END DO
+
+  END IF
+
+END SUBROUTINE IS_DUPLICATE_PREV
+
+!--------------------------------------------------------------------
+
+SUBROUTINE WRITE_CG_MAP()
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+  
+  INTEGER :: ierr,i,j,k
+
+  OPEN(unit = outwrite,file =trim(out_fname),action="write",status="re&
+       &place",iostat=ierr)
+
+  DO k = 1, nchains
+
+     WRITE(outwrite,*) "Chain number: ", k
+
+     DO j = 1,nmonsperchain
+
+        WRITE(outwrite,'(A25,1X,I0,1X,F16.8)') "Monomer number/Mass:&
+             & ", j, mass_cg(j,k)
+
+        WRITE(outwrite,'(*(I0,1X))') (cg_mapped_array(i,j,k),i=1&
+             &,natpermon)
+
+     END DO
+
+  END DO
+     
+  CLOSE(outwrite)
+
+END SUBROUTINE WRITE_CG_MAP
+
+!--------------------------------------------------------------------
+
+SUBROUTINE FIND_MASS_OF_CG_ATOMS()
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  INTEGER :: AllocateStatus
+  INTEGER :: i,j,k,atype,flagterm
+
+  PRINT *, "Initiating Step 3: Finding Masses of CG atoms .."
+  
+  ALLOCATE(mass_cg(nmonsperchain,nchains),stat = AllocateStatus)
+  IF(AllocateStatus/=0) STOP "did not allocate mass_cg"
+
+  DO k = 1,nchains
+
+     DO j = 1,nmonsperchain
+
+        DO i = 1,natpermon
+           
+           atype = aidvals(cg_mapped_array(i,j,k),3)
+           mass_cg(j,k) = mass_cg(j,k) + masses(atype,1)
+
+        END DO
+
+        mass_cg(j,k) = mass_cg(j,k)/REAL(natpermon)
+
+     END DO
+
+  END DO
+           
+  CALL IS_TERMINAL_ACCOUNTED(flagterm)
+
+  IF(flagterm) THEN
+     
+     DO i = 1,nchains
+
+        mass_cg(nmonsperchain,i) =(mass_cg(nmonsperchain,i)*natpermon&
+             & + masses(term_type,1))/REAL(natpermon+1)
+
+     END DO
+
+  END IF
+
+  PRINT *, "Tabulated masses of CG atoms .."
+
+END SUBROUTINE FIND_MASS_OF_CG_ATOMS
+
+!--------------------------------------------------------------------
+
+SUBROUTINE IS_TERMINAL_ACCOUNTED(acctflag)
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  INTEGER, INTENT(OUT) :: acctflag
+  INTEGER :: i,j,k
+
+  acctflag = -1
+
+  DO k = 1,nchains
+
+     DO j = 1,nmonsperchain-1
+
+        DO i = 1,natpermon
+
+           IF(term_ID == cg_mapped_array(i,j,k)) THEN
+
+              acctflag = 1
+              EXIT
+
+           END IF
+
+        END DO
+
+     END DO
+
+  END DO
+
+  IF(acctflag == 1) PRINT *, "Terminal atom was already present"
+  
+
+END SUBROUTINE IS_TERMINAL_ACCOUNTED
+
+!--------------------------------------------------------------------
+
+SUBROUTINE ALLOCATE_ARRAYS()
+
+  USE PARAMS_COARSEGRAIN
+  IMPLICIT NONE
+
+  INTEGER :: AllocateStatus
+
+! Allocate LAMMPS Structure
+
+  ALLOCATE(aidvals(ntotatoms,3),stat = AllocateStatus)
+  IF(AllocateStatus/=0) STOP "did not allocate aidvals"
+  ALLOCATE(rxyz_lmp(ntotatoms,3),stat = AllocateStatus)
+  IF(AllocateStatus/=0) STOP "did not allocate rxyz_lmp"
+  ALLOCATE(charge_lmp(ntotatoms,1),stat = AllocateStatus)
+  IF(AllocateStatus/=0) STOP "did not allocate charge_lmp"
+  ALLOCATE(vel_xyz(ntotatoms,4),stat = AllocateStatus)
+  IF(AllocateStatus/=0) STOP "did not allocate vel_xyz"
+
+  IF(ntotbonds /= 0) THEN
+     ALLOCATE(bond_lmp(ntotbonds,4),stat = AllocateStatus)
+     IF(AllocateStatus/=0) STOP "did not allocate bond_lmp"
+  ELSE
+     PRINT *, "Warning: No bonds - Not correct for bonded systems"
+     ALLOCATE(bond_lmp(1,1),stat = AllocateStatus)
+     DEALLOCATE(bond_lmp)
+  END IF
+  
+  IF(ntotangls /= 0) THEN
+     ALLOCATE(angl_lmp(ntotangls,5),stat = AllocateStatus)
+     IF(AllocateStatus/=0) STOP "did not allocate angl_lmp"
+  ELSE
+     ALLOCATE(angl_lmp(1,1),stat = AllocateStatus)
+     DEALLOCATE(angl_lmp)
+  END IF
+     
+  IF(ntotdihds /= 0) THEN
+     ALLOCATE(dihd_lmp(ntotdihds,6),stat = AllocateStatus)
+     IF(AllocateStatus/=0) STOP "did not allocate dihd_lmp"
+  ELSE
+     ALLOCATE(dihd_lmp(1,1),stat = AllocateStatus)
+     DEALLOCATE(dihd_lmp)
+  END IF
+  
+  IF(ntotimprs /= 0) THEN
+     ALLOCATE(impr_lmp(ntotimprs,6),stat = AllocateStatus)
+     IF(AllocateStatus/=0) STOP "did not allocate zlmp"
+  ELSE
+     ALLOCATE(impr_lmp(1,1),stat = AllocateStatus)
+     DEALLOCATE(impr_lmp)
+  END IF
+
+
+! Allocate Box details
+
+  ALLOCATE(boxx_arr(nframes),stat = AllocateStatus)
+  IF(AllocateStatus/=0) STOP "did not allocate boxx_arr"
+  ALLOCATE(boxy_arr(nframes),stat = AllocateStatus)
+  IF(AllocateStatus/=0) STOP "did not allocate boxy_arr"
+  ALLOCATE(boxz_arr(nframes),stat = AllocateStatus)
+  IF(AllocateStatus/=0) STOP "did not allocate boxz_arr"
+
+END SUBROUTINE ALLOCATE_ARRAYS
+
+!--------------------------------------------------------------------
+
+SUBROUTINE DEALLOCATE_ARRAYS()
+
+  USE PARAMS_COARSEGRAIN
+
+  IMPLICIT NONE
+
+  DEALLOCATE(aidvals)
+  DEALLOCATE(rxyz_lmp)
+  DEALLOCATE(vel_xyz)
+
+  IF(ntotbonds /= 0) DEALLOCATE(bond_lmp)
+  IF(ntotangls /= 0) DEALLOCATE(angl_lmp)
+  IF(ntotdihds /= 0) DEALLOCATE(dihd_lmp)
+  IF(ntotimprs /= 0) DEALLOCATE(impr_lmp)
+
+END SUBROUTINE DEALLOCATE_ARRAYS
+
+!---------------------------------------------------------------------
